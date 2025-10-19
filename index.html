@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Roselle Bloom: Your Daily Wellness Tea Data</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap" rel="stylesheet">
+    <style>
+        /* Set Inter as the primary font */
+        :root {
+            font-family: 'Inter', sans-serif;
+        }
+
+        /* Define custom CSS for layout and utilities */
+        .feedback-button {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 10;
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 8px 25px rgba(225, 29, 72, 0.4); /* Custom rose shadow */
+            transition: transform 0.3s ease, background-color 0.3s;
+            background-color: #E11D48; /* Rose-600 */
+        }
+        .feedback-button:hover {
+            transform: scale(1.1);
+            background-color: #BE123C; /* Rose-700 */
+        }
+        
+        /* Modal Backdrop */
+        .modal-backdrop {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.7);
+            z-index: 40;
+            display: none; /* Controlled by JS */
+            backdrop-filter: blur(3px);
+        }
+        
+        /* Custom Alert/Message Box */
+        .message-box {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 50;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.3s ease;
+            background-color: white;
+            padding: 2rem;
+            border-radius: 0.75rem;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
+            text-align: center;
+            max-width: 90%;
+            min-width: 300px;
+        }
+        .message-box.visible {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        /* Status Dot for Server Connection */
+        .status-dot {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+            background-color: #10B981; /* Emerald-500 */
+        }
+        .comment-card {
+            border-left: 4px solid #F43F5E; /* Rose-500 */
+        }
+        .data-card {
+            background-color: #FFFFFF;
+            padding: 1.5rem;
+            border-radius: 0.75rem;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+            margin-bottom: 1.5rem;
+            border-top: 4px solid var(--tw-color-roselle-secondary);
+        }
+        .data-list li {
+            margin-bottom: 0.5rem;
+            padding-left: 1.5rem;
+            position: relative;
+        }
+        .data-list li::before {
+            content: '•';
+            color: #E11D48; /* Roselle Primary */
+            font-weight: bold;
+            display: inline-block;
+            width: 1em;
+            margin-left: -1em;
+            position: absolute;
+            left: 0;
+        }
+        .user-id-text {
+            word-break: break-all;
+            font-size: 0.75rem;
+            color: #9CA3AF;
+            margin-top: 0.5rem;
+        }
+    </style>
+    <script>
+        // Tailwind config for custom colors
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'roselle-primary': '#E11D48', // Rose-600
+                        'roselle-secondary': '#F43F5E', // Rose-500
+                        'roselle-light': '#FBCFE8', // Rose-200
+                        'roselle-dark': '#831843', // Rose-800
+                        'bg-light': '#FFF7F9', // Light background
+                    }
+                }
+            }
+        }
+
+        // --- GLOBAL STATE & LOCAL STORAGE KEYS ---
+        let votes = { likes: 0, dislikes: 0 };
+        let comments = [];
+        let hasVoted = false; // Protects against multiple votes in the same browser
+        const VOTES_KEY = 'roselle_votes';
+        const COMMENTS_KEY = 'roselle_comments';
+        const VOTED_KEY = 'roselle_has_voted';
+
+        // --- UTILITY FUNCTIONS ---
+        
+        /** Shows a custom message box instead of using alert() */
+        window.showMessage = function(text, isError = false) {
+            const messageBox = document.getElementById('message-box');
+            const messageText = document.getElementById('message-text');
+            messageText.textContent = text;
+            messageText.className = `text-lg font-medium ${isError ? 'text-red-600' : 'text-green-600'}`;
+            messageBox.classList.add('visible');
+        }
+
+        /** Hides the custom message box */
+        window.hideMessage = function() {
+            document.getElementById('message-box').classList.remove('visible');
+        }
+
+        // --- LOCAL STORAGE DATA MANAGEMENT ---
+        
+        /** Loads all data from localStorage into memory */
+        function loadData() {
+            try {
+                // Load Votes
+                const storedVotes = localStorage.getItem(VOTES_KEY);
+                if (storedVotes) {
+                    votes = JSON.parse(storedVotes);
+                } else {
+                    // Initialize if missing
+                    votes = { likes: 0, dislikes: 0 };
+                }
+
+                // Load Comments
+                const storedComments = localStorage.getItem(COMMENTS_KEY);
+                if (storedComments) {
+                    comments = JSON.parse(storedComments);
+                } else {
+                    comments = [];
+                }
+                
+                // Load Vote Status
+                hasVoted = localStorage.getItem(VOTED_KEY) === 'true';
+
+            } catch (e) {
+                console.error("Error loading data from localStorage:", e);
+                // Clear potentially corrupted data
+                localStorage.clear();
+            }
+            // Render the initial state
+            renderUI();
+        }
+
+        /** Saves the current state of votes and comments to localStorage */
+        function saveData() {
+            localStorage.setItem(VOTES_KEY, JSON.stringify(votes));
+            localStorage.setItem(COMMENTS_KEY, JSON.stringify(comments));
+            localStorage.setItem(VOTED_KEY, hasVoted);
+        }
+
+        // --- RENDERING LOGIC ---
+
+        function renderUI() {
+            renderVotes();
+            renderComments();
+            renderVoteButtons();
+        }
+
+        function renderVotes() {
+            document.getElementById('like-count').textContent = votes.likes;
+            document.getElementById('dislike-count').textContent = votes.dislikes;
+        }
+
+        function renderVoteButtons() {
+            const likeButton = document.getElementById('like-button');
+            const dislikeButton = document.getElementById('dislike-button');
+            const voteMessage = document.getElementById('vote-message');
+
+            likeButton.disabled = hasVoted;
+            dislikeButton.disabled = hasVoted;
+            
+            if (hasVoted) {
+                voteMessage.textContent = "Thank you! You have already submitted your vote on this device.";
+                voteMessage.classList.remove('text-gray-500');
+                voteMessage.classList.add('text-roselle-dark', 'font-semibold');
+            } else {
+                voteMessage.textContent = "Your vote is saved locally on your browser.";
+                voteMessage.classList.remove('text-roselle-dark', 'font-semibold');
+                voteMessage.classList.add('text-gray-500');
+            }
+        }
+
+        function renderComments() {
+            const commentsList = document.getElementById('comments-list');
+            commentsList.innerHTML = ''; // Clear existing comments
+
+            if (comments.length === 0) {
+                commentsList.innerHTML = '<p class="text-center text-gray-500 italic p-4 bg-white rounded-lg shadow-sm">No feedback yet. Be the first!</p>';
+            } else {
+                // Sort comments by timestamp (most recent first)
+                comments.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+                comments.forEach(comment => {
+                    const commentDiv = document.createElement('div');
+                    commentDiv.className = 'comment-card p-4 bg-white rounded-lg shadow-md';
+                    
+                    // Format timestamp
+                    const timestamp = new Date(comment.timestamp);
+                    const dateString = timestamp.toLocaleDateString() + " " + timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                    
+                    commentDiv.innerHTML = `
+                        <p class="text-gray-800 text-lg">${comment.text}</p>
+                        <p class="text-xs text-gray-500 mt-2 font-medium">— ${comment.name || 'Anonymous'} at ${dateString}</p>
+                    `;
+                    commentsList.appendChild(commentDiv);
+                });
+            }
+        }
+
+
+        // --- EVENT HANDLERS (Local Write Operations) ---
+
+        window.handleVote = function(type) {
+            if (hasVoted) { 
+                showMessage("You have already submitted your vote from this browser.", true);
+                return; 
+            }
+
+            // Update local state
+            if (type === 'like') {
+                votes.likes += 1;
+            } else {
+                votes.dislikes += 1;
+            }
+            hasVoted = true;
+
+            // Save and render
+            saveData();
+            renderUI();
+            
+            showMessage(`Thank you for your ${type} vote! Your feedback is saved locally.`, false);
+        }
+
+        window.submitComment = function() {
+            const nameInput = document.getElementById('commenter-name');
+            const textInput = document.getElementById('comment-text');
+            
+            const name = nameInput.value.trim();
+            const text = textInput.value.trim();
+            
+            if (text.length < 5) { 
+                showMessage("Please enter a longer suggestion (min 5 characters).", true); 
+                return; 
+            }
+            
+            // Create new comment object
+            const newComment = {
+                name: name.substring(0, 50) || 'Anonymous', 
+                text: text.substring(0, 500), 
+                timestamp: new Date().toISOString() // ISO string for easy storage/retrieval
+            };
+            
+            // Update local state
+            comments.push(newComment);
+            
+            // Save and render
+            saveData();
+            renderComments();
+            
+            // Clear the form fields on success
+            nameInput.value = ''; 
+            textInput.value = '';
+            
+            showMessage("Your suggestion has been saved locally!", false);
+        }
+
+        // --- Initialization ---
+        window.onload = function() {
+            loadData();
+            // Enable the comment button once data is loaded
+            document.getElementById('submit-comment-btn').disabled = false;
+        };
+    </script>
+</head>
+<body class="bg-bg-light font-sans min-h-screen">
+
+    <div class="max-w-4xl mx-auto p-4 md:p-8">
+        <header class="text-center py-12 bg-roselle-dark text-white rounded-xl shadow-2xl mb-8">
+            <h1 class="text-4xl md:text-5xl font-extrabold mb-2 tracking-tight">The Roselle Bloom 🌺</h1>
+            <p class="text-xl italic font-light">Your Daily Wellness Tea Data and Feedback</p>
+        </header>
+
+        <!-- --- COMPREHENSIVE DATA SECTIONS (CONTENT REMAINS UNCHANGED) --- -->
+        
+        <section id="hibiscus-profile" class="data-card">
+            <h2 class="text-3xl font-bold text-roselle-primary mb-4">Hibiscus Sabdariffa Profile (China Rose)</h2>
+            
+            <div class="grid md:grid-cols-2 gap-6">
+                <!-- Botanical Details -->
+                <div class="p-4 bg-roselle-light rounded-lg">
+                    <h3 class="text-xl font-semibold text-roselle-dark mb-2 border-b border-roselle-secondary pb-1">Botanical Details</h3>
+                    <ul class="data-list text-sm text-gray-800 space-y-1">
+                        <li><span class="font-medium">Latin Name:</span> Hibiscus sabdariffa</li>
+                        <li><span class="font-medium">Common Name:</span> China Rose</li>
+                        <li><span class="font-medium">Family:</span> Malvaceae</li>
+                        <li><span class="font-medium">Native Origin:</span> Most likely South Africa</li>
+                    </ul>
+                    <p class="text-xs italic text-gray-600 mt-3">
+                        Description: An erect, branched, annual shrub with a deep, penetrating tap root, and mostly red stems. The variety used is <span class="font-medium">Hibiscus sabdariffa var. sabdariffa</span>.
+                    </p>
+                </div>
+
+                <!-- Herbal Actions & Constituents -->
+                <div>
+                    <h3 class="text-xl font-semibold text-roselle-dark mb-2">Key Actions and Components</h3>
+                    <div class="mb-4">
+                        <p class="font-bold text-roselle-dark mb-1">Herbal Actions:</p>
+                        <ul class="data-list text-sm text-gray-700 grid grid-cols-2 gap-x-2">
+                            <li>Cholesterol lowering</li>
+                            <li>Anti-inflammatory</li>
+                            <li>Antidiabetic</li>
+                            <li>Demulcent</li>
+                            <li>Antioxidant</li>
+                            <li>Diuretic</li>
+                            <li>Refrigerant</li>
+                            <li>Digestive Tonic</li>
+                        </ul>
+                    </div>
+                    <div class="mt-4">
+                        <p class="font-bold text-roselle-dark mb-1">Primary Constituents:</p>
+                        <ul class="data-list text-sm text-gray-700">
+                            <li><span class="font-medium">Acids:</span> Phenolic acids (esp. protocatechuic acid), Hydroxycitric acid, Hibiscus acid.</li>
+                            <li><span class="font-medium">Bioactives:</span> Anthocyanins (delphinidin-3-sambubioside and cyanidin-3-sambubioside), Flavonoids, Polysaccharides.</li>
+                            <li><span class="font-medium">Nutrition:</span> Vitamin C, beta-carotene, Calcium, Iron.</li>
+                            <li><span class="font-medium">Others:</span> Alkaloids, Tannins, Saponins, Glycosides, Phenols.</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </section>
+        
+        <section id="licorice-profile" class="data-card">
+            <h2 class="text-3xl font-bold text-roselle-primary mb-4">Licorice Root Profile (Glycyrrhiza glabra)</h2>
+            <div class="grid md:grid-cols-2 gap-6">
+                <!-- Licorice Details -->
+                <div>
+                    <h3 class="text-xl font-semibold text-roselle-dark mb-2">Uses and Description</h3>
+                    <p class="text-sm text-gray-700 mb-3">
+                        The pharmacopeial drug is the dried, unpeeled or peeled root and stolons of <span class="font-medium">Glyrrhiza glabra L.</span> and or <span class="font-medium">G. inflate Bat.</span> and or <span class="font-medium">G. uralensis fisch</span>. Grown in Spain, Italy, England, France, Germany, and USA.
+                    </p>
+                    <p class="font-bold text-roselle-dark mb-1">Key Uses:</p>
+                    <ul class="data-list text-sm text-gray-700 grid grid-cols-2 gap-x-2">
+                        <li>Expectorant (Respiratory)</li>
+                        <li>Anti-tumor</li>
+                        <li>Peptic Ulcer Treatment</li>
+                        <li>Anti-hepatotoxic</li>
+                        <li>Demulcent</li>
+                        <li>Anti-mutagenic</li>
+                        <li>Flavoring Agent</li>
+                        <li>Anti-microbial</li>
+                    </ul>
+                </div>
+
+                <!-- Licorice Constituents -->
+                <div>
+                    <h3 class="text-xl font-semibold text-roselle-dark mb-2">Key Constituents</h3>
+                    <ul class="data-list text-sm text-gray-700">
+                        <li><span class="font-medium">Primary Compounds:</span> Liquiritin, Iso-liqueritin (chalcone), Liquiritigenin, Iso-liquiritigenin (chalcone form).</li>
+                        <li><span class="font-medium">Sugars:</span> About 5-15% (glucose, sucrose).</li>
+                        <li><span class="font-medium">Other:</span> 1-2% Asparagine (amide of aspartic or amino succinate acid), 0.04-0.06% volatile compounds.</li>
+                    </ul>
+                    <div class="mt-4 p-3 bg-roselle-light rounded-lg">
+                        <p class="font-bold text-roselle-dark text-sm">Diabetic Implication:</p>
+                        <p class="text-xs text-gray-700">
+                            <span class="font-medium">Iso-liquiritigenin</span> is reported to be an aldose reductase inhibitor and may be effective in preventing diabetic complications.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="stevia-profile" class="data-card">
+            <h2 class="text-3xl font-bold text-roselle-primary mb-4">Stevia Profile (Stevia rebaudiana)</h2>
+            <div class="grid md:grid-cols-2 gap-6">
+                <!-- Stevia Details -->
+                <div>
+                    <h3 class="text-xl font-semibold text-roselle-dark mb-2 border-b border-roselle-secondary pb-1">Botanical and Properties</h3>
+                    <ul class="data-list text-sm text-gray-800 space-y-1">
+                        <li><span class="font-medium">Latin Name:</span> Stevia rebaudiana</li>
+                        <li><span class="font-medium">Common Name:</span> Sweet Leaf, Sugar Leaf</li>
+                        <li><span class="font-medium">Family:</span> Asteraceae (Compositae)</li>
+                        <li><span class="font-medium">Native Origin:</span> Paraguay and Brazil (South America)</li>
+                    </ul>
+                    <p class="text-sm text-gray-700 mt-3">
+                        Stevia is a perennial shrub known for its natural non-caloric sweetness. It serves as a substitute for synthetic sweeteners, with a sweetening power <span class="font-medium">100-300 times higher</span> than sucrose. The primary sweet compounds are <span class="font-medium">steviol glycosides</span>.
+                    </p>
+                </div>
+                <!-- Stevia Constituents & Safety -->
+                <div>
+                    <h3 class="text-xl font-semibold text-roselle-dark mb-2">Key Constituents and Safety</h3>
+                    <ul class="data-list text-sm text-gray-700">
+                        <li><span class="font-medium">Sweeteners (Diterpenes):</span> Stevioside (Stv) and Rebaudioside A (Reb A) are the major glycosides.</li>
+                        <li><span class="font-medium">Minerals:</span> Contains important elements like Calcium, Potassium, Zinc, Iron, Selenium, and Manganese, which boost the immune system and support glucose tolerance.</li>
+                        <li><span class="font-medium">Minimal Sweetness Dose:</span> approximately 1 mg(per)kg body weight(per)day of steviol equivalents.</li>
+                    </ul>
+                    <div class="mt-4 p-3 bg-roselle-light rounded-lg">
+                        <p class="font-bold text-roselle-dark text-sm mb-1">Health and Regulatory Safety (JECFA):</p>
+                        <p class="text-xs text-gray-700">
+                            The Acceptable Daily Intake (ADI) is 0–4 mg(per)kg body weight(per)day (as steviol equivalents). Steviol glycosides are safe, non-carcinogenic, have no effect on reproduction or fertility, and are suitable for diabetic and phenylketonuria patients.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="preparation-and-timing" class="data-card">
+            <h2 class="text-3xl font-bold text-roselle-primary mb-4">Preparation, Dosage, and Timing</h2>
+            <div class="grid md:grid-cols-3 gap-6">
+                <!-- Dosage -->
+                <div>
+                    <h3 class="text-xl font-semibold text-roselle-dark mb-2">Recommended Dosing</h3>
+                    <ul class="data-list text-gray-700">
+                        <li><span class="font-medium">Hibiscus:</span> 1 gm per 200 ml cup</li>
+                        <li><span class="font-medium">STEVIA:</span> 1.5 gm</li>
+                        <li><span class="font-medium">Licorice Root:</span> 0.1 gm</li>
+                    </ul>
+                    <p class="mt-3 text-gray-600 italic text-sm">
+                        Recommended dose: Drink regular per day as part of a balanced varied diet and healthy lifestyle.
+                    </p>
+                </div>
+                <!-- Cooking -->
+                <div>
+                    <h3 class="text-xl font-semibold text-roselle-dark mb-2">Brewing Instructions ☕</h3>
+                    <ol class="list-decimal list-inside ml-2 space-y-2 text-gray-700 text-sm">
+                        <li>For every cup with 200 ml fresh boiled water (100 degree C).</li>
+                        <li>Add one tea bag.</li>
+                        <li>Steep for <span class="font-medium">3-4 minutes</span>.</li>
+                    </ol>
+                    <p class="mt-4 text-xs text-gray-500">Storage: Keep in a cool and dry place.</p>
+                </div>
+                <!-- Timing -->
+                <div class="p-3 bg-roselle-light rounded-lg">
+                    <h3 class="text-xl font-semibold text-roselle-dark mb-2">Optimal Drinking Time</h3>
+                    <p class="text-sm text-gray-700 font-medium mb-1">There’s no single best time—it depends on your needs.</p>
+                    <ul class="list-disc list-inside text-xs text-gray-700 space-y-1 ml-2">
+                        <li><span class="font-medium">Evenings:</span> Excellent because it is naturally caffeine-free and relaxing.</li>
+                        <li><span class="font-medium">After Meals:</span> May help support healthy blood sugar levels.</li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+
+        <section id="mechanism" class="data-card">
+            <h2 class="text-3xl font-bold text-roselle-primary mb-4">Blood Pressure Regulation Mechanism</h2>
+            <p class="text-gray-700 mb-4">
+                Hibiscus tea is a caffeine-free herbal drink that may help lower blood pressure and can be enjoyed hot or iced. Research shows that drinking this tea daily can lower both systolic and diastolic blood pressure. One study found that drinking 2 cups of hibiscus tea regularly may lower blood pressure over time, with an average reduction of <span class="font-medium">5 to 7 mmHg</span> in systolic blood pressure.
+            </p>
+            
+            <div class="grid md:grid-cols-3 gap-6 mt-4 text-center">
+                <div class="p-4 bg-roselle-light rounded-lg">
+                    <p class="text-2xl mb-2">🚫 ACE</p>
+                    <p class="font-semibold text-roselle-dark">Blocks ACE Activity</p>
+                    <p class="text-sm text-gray-700">Inhibits Angiotensin-Converting Enzyme, helping blood vessels relax and lower pressure.</p>
+                </div>
+                <div class="p-4 bg-roselle-light rounded-lg">
+                    <p class="text-2xl mb-2">🛡️ DNA</p>
+                    <p class="font-semibold text-roselle-dark">Antioxidant Power</p>
+                    <p class="text-sm text-gray-700">Reduces inflammation and protects the blood vessel lining from damage.</p>
+                </div>
+                <div class="p-4 bg-roselle-light rounded-lg">
+                    <p class="text-2xl mb-2">💧 Fluid</p>
+                    <p class="font-semibold text-roselle-dark">Diuretic Function</p>
+                    <p class="text-sm text-gray-700">Aids the body in eliminating excess fluid, which reduces blood volume and pressure.</p>
+                </div>
+            </div>
+            
+            <div class="mt-6 p-4 border border-red-300 rounded-lg bg-red-50">
+                <p class="font-bold text-roselle-dark mb-2">Important Precautions (Key Takeaway):</p>
+                <ul class="list-disc list-inside text-sm text-gray-700 ml-2">
+                    <li><span class="font-medium">Pregnancy:</span> It may raise the risk of miscarriage.</li>
+                    <li><span class="font-medium">Breastfeeding:</span> Hibiscus tea may be harmful to infants.</li>
+                    <li><span class="font-medium">Children and Adolescents:</span> There is insufficient scientific evidence to conclude that it is safe.</li>
+                </ul>
+            </div>
+        </section>
+
+        <section id="references" class="data-card">
+            <h2 class="text-3xl font-bold text-roselle-primary mb-4">Scientific Monograph and References</h2>
+            <p class="text-lg font-semibold text-roselle-dark mb-3">Hibiscus and Stevia References:</p>
+            <ol class="list-decimal list-inside text-sm text-gray-700 ml-4 space-y-2">
+                <li>PURO, K, R SUNJUKTA, S SAMIR, S GHATAK, I SHAKUNTALA, and A SEN. 2016. "Medicinal Uses Of Roselle Plant (Hibiscus Sabdariffa L.): A Mini Review". Indian Journal Of Hill Farming 27 (1): 81-90. <a href="http://www.kiran.nic.in/pdf/IJHF/Vol27_1/9-MedicinalUsesRosellePlant.pdf" target="_blank" class="text-roselle-secondary hover:underline">http: per www.kiran.nic.in per pdf per IJHF per Vol27_1 per 9-MedicinalUsesRosellePlant.pdf</a>.</li>
+                <li>Formagio, ASN., DD. Ramos, MC. Vieira, SR. Ramalho, MM. Silva, NAH. Zárate, MA. Foglio, and JE. Carvalho. 2015. "Phenolic Compounds Of Hibiscus Sabdariffa And Influence Of Organic Residues On Its Antioxidant And Antitumoral Properties". Brazilian Journal Of Biology 75 (1): 69-76. doi:10.1590 per 1519- 6984.07413.</li>
+                <li>Nwachukwu, DanielChukwu, EddyIkemefuna Aneke, LeonardFidelis Obika, and NkiruZuada Nwachukwu. 2015. "Effects Of Aqueous Extract Of Hibiscus Sabdariffa On The Renin-Angiotensin-Aldosterone System Of Nigerians With Mild To Moderate Essential Hypertension: A Comparative Study With Lisinopril". Indian Journal Of Pharmacology 47 (5): 540. doi:10.4103 per 0253-0253.165215.</li>
+                <li>Jalalyazdi M, et al. 2019. "Effect of hibiscus sabdariffa on blood pressure in patients with stage 1 hypertension." J Adv Pharm Technol Res. 10(3):107-111.</li>
+                <li><span class="font-medium">Mechanism Source:</span> Verywell Health article on best time to drink hibiscus tea.</li>
+                <li><span class="font-medium">Steviol Glycosides ADI:</span> JECFA (Joint FAO WHO Expert Committee on Food Additives). Evaluation of certain food additives: Steviol glycosides. WHO Technical Report Series No. 965 (2011). ADI: 0–4 mg(per)kg body weight(per)day (as steviol equivalents). [Source: WHO JECFA Monographs 10 (2010)].</li>
+            </ol>
+
+            <p class="text-lg font-semibold text-roselle-dark mt-6 mb-3">Licorice Pharmacopeia Sources:</p>
+            <ul class="list-disc list-inside text-sm text-gray-700 ml-4 space-y-1">
+                <li>According to <span class="font-medium">British Pharmacopeia</span>.</li>
+                <li>Trease and Evans Pharmacognosy (15th Edition, page 455).</li>
+                <li>Trease and Evans Pharmacognosy (16th Edition, pages 492 and 495 - referencing ESCOP).</li>
+            </ul>
+        </section>
+        
+        <!-- --- FEEDBACK SECTIONS START HERE --- -->
+        
+        <!-- Connection Status Indicator (Static for Local Host) -->
+        <p id="connection-status" class="mb-6 text-center text-sm font-medium text-gray-500">
+            <span id="status-dot" class="status-dot"></span>
+            <span id="status-text" class="text-green-600">Local Status: Data is saved only in this browser's storage.</span>
+        </p>
+        
+        <!-- Vote Section -->
+        <section id="vote-section" class="bg-white p-6 md:p-10 rounded-xl shadow-lg mb-12 border-t-4 border-roselle-secondary">
+            <h2 class="text-3xl font-bold text-roselle-primary mb-6">Rate Your Experience:</h2>
+            
+            <div class="flex flex-col sm:flex-row justify-around items-center space-y-4 sm:space-y-0 sm:space-x-8">
+                <!-- Like Button -->
+                <button id="like-button" onclick="handleVote('like')" class="vote-button flex flex-col items-center justify-center w-full sm:w-48 h-24 p-4 bg-green-500 text-white rounded-lg transition duration-150 hover:bg-green-600 shadow-md transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed">
+                    <span class="text-3xl">👍</span>
+                    <span class="text-lg font-semibold mt-1">Great Taste (<span id="like-count">0</span>)</span>
+                </button>
+                <!-- Dislike Button -->
+                <button id="dislike-button" onclick="handleVote('dislike')" class="vote-button flex flex-col items-center justify-center w-full sm:w-48 h-24 p-4 bg-red-500 text-white rounded-lg transition duration-150 hover:bg-red-600 shadow-md transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed">
+                    <span class="text-3xl">👎</span>
+                    <span class="text-lg font-semibold mt-1">Needs Work (<span id="dislike-count">0</span>)</span>
+                </button>
+            </div>
+            <p id="vote-message" class="text-center text-sm text-gray-500 mt-4 italic">Loading user data...</p>
+        </section>
+
+        <!-- Comment Submission Form -->
+        <section id="comment-form" class="bg-white p-6 md:p-10 rounded-xl shadow-lg mb-12 border-t-4 border-roselle-primary">
+            <h2 class="text-3xl font-bold text-roselle-primary mb-6">Suggestions and Comments</h2>
+            <input type="text" id="commenter-name" placeholder="Your Name (Optional)" maxlength="50" class="w-full p-3 mb-3 border-2 border-roselle-light rounded-lg focus:ring-roselle-secondary focus:border-roselle-secondary transition">
+            <textarea id="comment-text" rows="4" placeholder="Share your valuable feedback and suggestions..." maxlength="500" class="w-full p-3 border-2 border-roselle-light rounded-lg focus:ring-roselle-secondary focus:border-roselle-secondary transition"></textarea>
+            <button onclick="submitComment()" class="mt-4 w-full md:w-auto px-8 py-3 bg-roselle-primary text-white font-semibold rounded-lg transition duration-300 hover:bg-roselle-dark shadow-md transform hover:scale-[1.02] disabled:opacity-50 disabled:cursor-not-allowed" disabled id="submit-comment-btn">
+                Submit Feedback 🚀
+            </button>
+        </section>
+
+        <!-- Comments List -->
+        <section id="comments-section">
+            <h2 class="text-3xl font-bold text-roselle-primary mb-6 border-b-2 border-roselle-secondary pb-2">Customer Insights (Local)</h2>
+            <div id="comments-list" class="space-y-4">
+                <!-- Comments will be injected here by JavaScript -->
+                <p class="text-center text-gray-500 italic">Comments will appear here once loaded from local storage...</p>
+            </div>
+            <p id="current-user-id" class="text-center user-id-text mt-6 text-roselle-dark font-medium">Data is stored locally in your browser and is not shared with others.</p>
+        </section>
+
+        <footer class="text-center py-6 border-t border-roselle-light mt-10 text-sm text-gray-500">
+            &copy; 2025 The Roselle Bloom. Final Year Pharmacy Project.
+        </footer>
+    </div>
+    
+    <!-- Custom Alert/Message Box -->
+    <div id="message-box" class="message-box">
+        <p id="message-text" class="text-lg font-medium text-gray-700"></p>
+        <button onclick="hideMessage()" class="mt-4 px-6 py-2 bg-roselle-primary text-white rounded-lg transition hover:bg-roselle-dark">Close</button>
+    </div>
+
+</body>
+</html>
