@@ -3,37 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>The Roselle Bloom: Your Daily Wellness Tea Data</title>
+    <title>The Roselle Bloom: Real-Time Community Feedback</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap" rel="stylesheet">
     <style>
         /* Set Inter as the primary font */
         :root {
             font-family: 'Inter', sans-serif;
+            --tw-color-roselle-primary: #E11D48;
+            --tw-color-roselle-secondary: #F43F5E;
         }
 
         /* Define custom CSS for layout and utilities */
-        .feedback-button {
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-            z-index: 10;
-            width: 60px;
-            height: 60px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            box-shadow: 0 8px 25px rgba(225, 29, 72, 0.4); /* Custom rose shadow */
-            transition: transform 0.3s ease, background-color 0.3s;
-            background-color: #E11D48; /* Rose-600 */
-        }
-        .feedback-button:hover {
-            transform: scale(1.1);
-            background-color: #BE123C; /* Rose-700 */
-        }
-        
-        /* Modal Backdrop */
         .modal-backdrop {
             position: fixed;
             top: 0;
@@ -76,10 +57,10 @@
             height: 12px;
             border-radius: 50%;
             margin-right: 8px;
-            background-color: #10B981; /* Emerald-500 */
+            transition: background-color 0.5s;
         }
         .comment-card {
-            border-left: 4px solid #F43F5E; /* Rose-500 */
+            border-left: 4px solid var(--tw-color-roselle-secondary);
         }
         .data-card {
             background-color: #FFFFFF;
@@ -96,7 +77,7 @@
         }
         .data-list li::before {
             content: '•';
-            color: #E11D48; /* Roselle Primary */
+            color: #E11D48; 
             font-weight: bold;
             display: inline-block;
             width: 1em;
@@ -126,14 +107,26 @@
                 }
             }
         }
+    </script>
+</head>
+<body class="bg-bg-light font-sans min-h-screen">
 
-        // --- GLOBAL STATE & LOCAL STORAGE KEYS ---
-        let votes = { likes: 0, dislikes: 0 };
-        let comments = [];
-        let hasVoted = false; // Protects against multiple votes in the same browser
-        const VOTES_KEY = 'roselle_votes';
-        const COMMENTS_KEY = 'roselle_comments';
-        const VOTED_KEY = 'roselle_has_voted';
+    <!-- Firebase SDKs are loaded here -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, collection, query, orderBy, serverTimestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- GLOBAL FIREBASE VARIABLES ---
+        let app = null;
+        let db = null;
+        let auth = null;
+        let userId = 'loading...';
+        const APP_ID_FALLBACK = 'roselle-app';
+        const APP_COLLECTION_NAME = 'tea_feedback'; // A custom collection name
+
+        // Set Firebase logging level (useful for debugging)
+        setLogLevel('Debug');
 
         // --- UTILITY FUNCTIONS ---
         
@@ -151,100 +144,200 @@
             document.getElementById('message-box').classList.remove('visible');
         }
 
-        // --- LOCAL STORAGE DATA MANAGEMENT ---
+        // --- FIREBASE INITIALIZATION AND AUTHENTICATION ---
         
-        /** Loads all data from localStorage into memory */
-        function loadData() {
+        async function initializeFirebase() {
             try {
-                // Load Votes
-                const storedVotes = localStorage.getItem(VOTES_KEY);
-                if (storedVotes) {
-                    votes = JSON.parse(storedVotes);
-                } else {
-                    // Initialize if missing
-                    votes = { likes: 0, dislikes: 0 };
+                // Mandatory Global Variables
+                const appId = typeof __app_id !== 'undefined' ? __app_id : APP_ID_FALLBACK;
+                const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+
+                if (Object.keys(firebaseConfig).length === 0) {
+                    throw new Error("Firebase config not available. Cannot initialize database.");
                 }
 
-                // Load Comments
-                const storedComments = localStorage.getItem(COMMENTS_KEY);
-                if (storedComments) {
-                    comments = JSON.parse(storedComments);
-                } else {
-                    comments = [];
-                }
+                app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
                 
-                // Load Vote Status
-                hasVoted = localStorage.getItem(VOTED_KEY) === 'true';
+                // Public Data Path for Multi-User access
+                window.getPublicDataPath = (collectionName) => {
+                    return `artifacts/${appId}/public/data/${collectionName}`;
+                };
 
-            } catch (e) {
-                console.error("Error loading data from localStorage:", e);
-                // Clear potentially corrupted data
-                localStorage.clear();
+                // Authentication listener to handle user state
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        document.getElementById('current-user-id').textContent = `Your User ID: ${userId} | Data is shared globally.`;
+                        updateConnectionStatus(true);
+                        
+                        // After successful auth, start listening to data
+                        initializeDataListeners();
+                    } else {
+                         // Sign in anonymously if no user is authenticated
+                        const __initial_auth_token = typeof window.__initial_auth_token !== 'undefined' ? window.__initial_auth_token : null;
+                        if (__initial_auth_token) {
+                            await signInWithCustomToken(auth, __initial_auth_token);
+                        } else {
+                            await signInAnonymously(auth);
+                        }
+                    }
+                });
+
+            } catch (error) {
+                console.error("Firebase initialization or Auth error:", error);
+                updateConnectionStatus(false, error.message);
+                showMessage("Database connection failed. Check console for details.", true);
             }
-            // Render the initial state
-            renderUI();
         }
 
-        /** Saves the current state of votes and comments to localStorage */
-        function saveData() {
-            localStorage.setItem(VOTES_KEY, JSON.stringify(votes));
-            localStorage.setItem(COMMENTS_KEY, JSON.stringify(comments));
-            localStorage.setItem(VOTED_KEY, hasVoted);
+        // --- CONNECTION STATUS UI ---
+
+        function updateConnectionStatus(isConnected, message = "") {
+            const dot = document.getElementById('status-dot');
+            const text = document.getElementById('status-text');
+
+            if (isConnected) {
+                dot.style.backgroundColor = '#10B981'; // Green
+                text.textContent = 'Database Connected: Real-time feedback sharing is active.';
+                text.classList.remove('text-red-600');
+                text.classList.add('text-green-600');
+            } else {
+                dot.style.backgroundColor = '#EF4444'; // Red
+                text.textContent = `Connection Error: ${message || 'Database not connected.'}`;
+                text.classList.remove('text-green-600');
+                text.classList.add('text-red-600');
+                document.getElementById('submit-comment-btn').disabled = true;
+            }
         }
+
+        // --- FIRESTORE DATA LISTENERS ---
+
+        function initializeDataListeners() {
+            if (!db) return;
+
+            // 1. Listen to Votes (Document)
+            const votesRef = doc(db, getPublicDataPath(APP_COLLECTION_NAME), 'global_votes');
+            onSnapshot(votesRef, (docSnap) => {
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    renderVotes(data.likes || 0, data.dislikes || 0);
+                } else {
+                    // Initialize the document if it doesn't exist
+                    setDoc(votesRef, { likes: 0, dislikes: 0, lastUpdated: serverTimestamp() }, { merge: true });
+                }
+            }, (error) => {
+                console.error("Error listening to votes:", error);
+                showMessage("Error loading votes. Check your connection.", true);
+            });
+
+            // 2. Listen to Comments (Collection)
+            const commentsCollectionRef = collection(db, getPublicDataPath(APP_COLLECTION_NAME));
+            // Note: We avoid orderBy here to prevent index missing errors, and sort locally.
+            const q = query(commentsCollectionRef);
+            
+            onSnapshot(q, (querySnapshot) => {
+                let fetchedComments = [];
+                querySnapshot.forEach((doc) => {
+                    const data = doc.data();
+                    // Only include documents that look like comments
+                    if (data.type === 'comment' && data.text) {
+                        fetchedComments.push({ id: doc.id, ...data });
+                    }
+                });
+                renderComments(fetchedComments);
+            }, (error) => {
+                console.error("Error listening to comments:", error);
+                showMessage("Error loading comments. Check your connection.", true);
+            });
+            
+            // Enable comment button once listeners are set up
+            document.getElementById('submit-comment-btn').disabled = false;
+        }
+
 
         // --- RENDERING LOGIC ---
 
-        function renderUI() {
-            renderVotes();
-            renderComments();
-            renderVoteButtons();
-        }
-
-        function renderVotes() {
-            document.getElementById('like-count').textContent = votes.likes;
-            document.getElementById('dislike-count').textContent = votes.dislikes;
-        }
-
-        function renderVoteButtons() {
-            const likeButton = document.getElementById('like-button');
-            const dislikeButton = document.getElementById('dislike-button');
-            const voteMessage = document.getElementById('vote-message');
-
-            likeButton.disabled = hasVoted;
-            dislikeButton.disabled = hasVoted;
+        function renderVotes(likes, dislikes) {
+            document.getElementById('like-count').textContent = likes;
+            document.getElementById('dislike-count').textContent = dislikes;
             
-            if (hasVoted) {
-                voteMessage.textContent = "Thank you! You have already submitted your vote on this device.";
-                voteMessage.classList.remove('text-gray-500');
-                voteMessage.classList.add('text-roselle-dark', 'font-semibold');
-            } else {
-                voteMessage.textContent = "Your vote is saved locally on your browser.";
-                voteMessage.classList.remove('text-roselle-dark', 'font-semibold');
-                voteMessage.classList.add('text-gray-500');
+            // Re-render vote buttons based on whether the current user has voted
+            checkUserVoteStatus();
+        }
+
+        // Checks if the user has already recorded a vote
+        async function checkUserVoteStatus() {
+            if (!db || !auth.currentUser) return;
+
+            // Check if user has a vote record in the 'user_votes' sub-collection
+            // Path: /artifacts/{appId}/public/data/tea_feedback/user_votes/votes/{userId}
+            const userVoteRef = doc(db, getPublicDataPath(APP_COLLECTION_NAME), 'user_votes', 'votes', auth.currentUser.uid);
+
+            try {
+                const docSnap = await getDoc(userVoteRef);
+                const hasVoted = docSnap.exists();
+                
+                const likeButton = document.getElementById('like-button');
+                const dislikeButton = document.getElementById('dislike-button');
+                const voteMessage = document.getElementById('vote-message');
+
+                likeButton.disabled = hasVoted;
+                dislikeButton.disabled = hasVoted;
+
+                if (hasVoted) {
+                    voteMessage.textContent = "Thank you! Your vote is recorded and shared globally.";
+                    voteMessage.classList.remove('text-gray-500');
+                    voteMessage.classList.add('text-roselle-dark', 'font-semibold');
+                } else {
+                    voteMessage.textContent = "Be the first to vote! Your rating will affect the global count.";
+                    voteMessage.classList.remove('text-roselle-dark', 'font-semibold');
+                    voteMessage.classList.add('text-gray-500');
+                }
+            } catch (error) {
+                console.error("Error checking user vote status:", error);
             }
         }
-
-        function renderComments() {
+        
+        function renderComments(comments) {
             const commentsList = document.getElementById('comments-list');
+            const commentCounter = document.getElementById('comment-counter'); // Get the new counter element
             commentsList.innerHTML = ''; // Clear existing comments
+
+            // Update the counter
+            const commentCount = comments.length;
+            commentCounter.textContent = `(${commentCount} Comment${commentCount !== 1 ? 's' : ''})`; 
 
             if (comments.length === 0) {
                 commentsList.innerHTML = '<p class="text-center text-gray-500 italic p-4 bg-white rounded-lg shadow-sm">No feedback yet. Be the first!</p>';
             } else {
-                // Sort comments by timestamp (most recent first)
-                comments.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+                // Sort comments by timestamp (most recent first) locally
+                comments.sort((a, b) => {
+                    // Handle Firestore Timestamp objects or fallback to plain Date objects
+                    const timeA = a.timestamp?.toMillis ? a.timestamp.toMillis() : (a.timestamp ? new Date(a.timestamp).getTime() : 0);
+                    const timeB = b.timestamp?.toMillis ? b.timestamp.toMillis() : (b.timestamp ? new Date(b.timestamp).getTime() : 0);
+                    return timeB - timeA;
+                });
 
                 comments.forEach(comment => {
                     const commentDiv = document.createElement('div');
                     commentDiv.className = 'comment-card p-4 bg-white rounded-lg shadow-md';
                     
                     // Format timestamp
-                    const timestamp = new Date(comment.timestamp);
+                    const timestamp = comment.timestamp?.toDate ? comment.timestamp.toDate() : new Date();
                     const dateString = timestamp.toLocaleDateString() + " " + timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
                     
+                    const isCurrentUser = auth.currentUser && comment.userId === auth.currentUser.uid;
+                    const name = comment.name || 'Anonymous';
+
                     commentDiv.innerHTML = `
                         <p class="text-gray-800 text-lg">${comment.text}</p>
-                        <p class="text-xs text-gray-500 mt-2 font-medium">— ${comment.name || 'Anonymous'} at ${dateString}</p>
+                        <p class="text-xs text-gray-500 mt-2 font-medium">
+                            — ${name} 
+                            ${isCurrentUser ? '<span class="text-roselle-primary font-bold">(You)</span>' : ''} 
+                            at ${dateString}
+                        </p>
                     `;
                     commentsList.appendChild(commentDiv);
                 });
@@ -252,76 +345,99 @@
         }
 
 
-        // --- EVENT HANDLERS (Local Write Operations) ---
+        // --- FIRESTORE WRITE OPERATIONS ---
 
-        window.handleVote = function(type) {
-            if (hasVoted) { 
-                showMessage("You have already submitted your vote from this browser.", true);
-                return; 
-            }
-
-            // Update local state
-            if (type === 'like') {
-                votes.likes += 1;
-            } else {
-                votes.dislikes += 1;
-            }
-            hasVoted = true;
-
-            // Save and render
-            saveData();
-            renderUI();
+        window.handleVote = async function(type) {
+            if (!auth.currentUser || !db) return showMessage("App is connecting to the database. Please wait.", true);
             
-            showMessage(`Thank you for your ${type} vote! Your feedback is saved locally.`, false);
+            const userVoteRef = doc(db, getPublicDataPath(APP_COLLECTION_NAME), 'user_votes', 'votes', auth.currentUser.uid);
+            
+            try {
+                // 1. Check if user has already voted
+                const docSnap = await getDoc(userVoteRef);
+                if (docSnap.exists()) {
+                    return showMessage("You have already submitted your vote. Only one vote per user is allowed.", true);
+                }
+                
+                // 2. Atomically update the global vote count
+                const votesRef = doc(db, getPublicDataPath(APP_COLLECTION_NAME), 'global_votes');
+                const updateField = type === 'like' ? 'likes' : 'dislikes';
+                
+                // We must fetch and update manually since we can't use 'increment' without a rule modification
+                const globalVoteSnap = await getDoc(votesRef);
+                const currentData = globalVoteSnap.data() || { likes: 0, dislikes: 0 };
+                
+                const newVotes = { 
+                    ...currentData, 
+                    [updateField]: (currentData[updateField] || 0) + 1,
+                    lastUpdated: serverTimestamp()
+                };
+
+                // Use setDoc to create the document if it doesn't exist, or merge the update if it does
+                await setDoc(votesRef, newVotes, { merge: true });
+                
+                // 3. Record that this user has voted
+                await setDoc(userVoteRef, { 
+                    voted: true, 
+                    type: type, 
+                    timestamp: serverTimestamp() 
+                });
+
+                showMessage(`Thank you for your ${type} vote! It has been recorded globally.`, false);
+                checkUserVoteStatus(); // Update buttons immediately
+                
+            } catch (error) {
+                console.error("Error submitting vote:", error);
+                showMessage("Failed to submit vote. Please try again.", true);
+            }
         }
 
-        window.submitComment = function() {
+        window.submitComment = async function() {
+            if (!auth.currentUser || !db) return showMessage("App is connecting to the database. Please wait.", true);
+
             const nameInput = document.getElementById('commenter-name');
             const textInput = document.getElementById('comment-text');
             
-            const name = nameInput.value.trim();
-            const text = textInput.value.trim();
+            const name = nameInput.value.trim().substring(0, 50);
+            const text = textInput.value.trim().substring(0, 500);
             
             if (text.length < 5) { 
                 showMessage("Please enter a longer suggestion (min 5 characters).", true); 
                 return; 
             }
             
-            // Create new comment object
-            const newComment = {
-                name: name.substring(0, 50) || 'Anonymous', 
-                text: text.substring(0, 500), 
-                timestamp: new Date().toISOString() // ISO string for easy storage/retrieval
-            };
-            
-            // Update local state
-            comments.push(newComment);
-            
-            // Save and render
-            saveData();
-            renderComments();
-            
-            // Clear the form fields on success
-            nameInput.value = ''; 
-            textInput.value = '';
-            
-            showMessage("Your suggestion has been saved locally!", false);
+            try {
+                // Get a new document reference within the collection
+                const commentsCollection = collection(db, getPublicDataPath(APP_COLLECTION_NAME));
+                const newCommentRef = doc(commentsCollection);
+                
+                await setDoc(newCommentRef, {
+                    type: 'comment',
+                    userId: auth.currentUser.uid,
+                    name: name || 'Anonymous User', 
+                    text: text, 
+                    timestamp: serverTimestamp()
+                });
+                
+                // Clear the form fields on success
+                nameInput.value = ''; 
+                textInput.value = '';
+                
+                showMessage("Your suggestion has been shared globally!", false);
+            } catch (error) {
+                console.error("Error submitting comment:", error);
+                showMessage("Failed to share comment. Please check your connection.", true);
+            }
         }
 
         // --- Initialization ---
-        window.onload = function() {
-            loadData();
-            // Enable the comment button once data is loaded
-            document.getElementById('submit-comment-btn').disabled = false;
-        };
+        window.onload = initializeFirebase;
     </script>
-</head>
-<body class="bg-bg-light font-sans min-h-screen">
 
     <div class="max-w-4xl mx-auto p-4 md:p-8">
         <header class="text-center py-12 bg-roselle-dark text-white rounded-xl shadow-2xl mb-8">
             <h1 class="text-4xl md:text-5xl font-extrabold mb-2 tracking-tight">The Roselle Bloom 🌺</h1>
-            <p class="text-xl italic font-light">Your Daily Wellness Tea Data and Feedback</p>
+            <p class="text-xl italic font-light">Real-Time Community Feedback & Data</p>
         </header>
 
         <!-- --- COMPREHENSIVE DATA SECTIONS (CONTENT REMAINS UNCHANGED) --- -->
@@ -435,12 +551,12 @@
                     <ul class="data-list text-sm text-gray-700">
                         <li><span class="font-medium">Sweeteners (Diterpenes):</span> Stevioside (Stv) and Rebaudioside A (Reb A) are the major glycosides.</li>
                         <li><span class="font-medium">Minerals:</span> Contains important elements like Calcium, Potassium, Zinc, Iron, Selenium, and Manganese, which boost the immune system and support glucose tolerance.</li>
-                        <li><span class="font-medium">Minimal Sweetness Dose:</span> approximately 1 mg(per)kg body weight(per)day of steviol equivalents.</li>
+                        <li><span class="font-medium">Minimal Sweetness Dose:</span> approximately $1~mg/kg$ body weight/day of steviol equivalents.</li>
                     </ul>
                     <div class="mt-4 p-3 bg-roselle-light rounded-lg">
                         <p class="font-bold text-roselle-dark text-sm mb-1">Health and Regulatory Safety (JECFA):</p>
                         <p class="text-xs text-gray-700">
-                            The Acceptable Daily Intake (ADI) is 0–4 mg(per)kg body weight(per)day (as steviol equivalents). Steviol glycosides are safe, non-carcinogenic, have no effect on reproduction or fertility, and are suitable for diabetic and phenylketonuria patients.
+                            The Acceptable Daily Intake (ADI) is $0–4~mg/kg$ body weight/day (as steviol equivalents). Steviol glycosides are safe, non-carcinogenic, have no effect on reproduction or fertility, and are suitable for diabetic and phenylketonuria patients.
                         </p>
                     </div>
                 </div>
@@ -466,7 +582,7 @@
                 <div>
                     <h3 class="text-xl font-semibold text-roselle-dark mb-2">Brewing Instructions ☕</h3>
                     <ol class="list-decimal list-inside ml-2 space-y-2 text-gray-700 text-sm">
-                        <li>For every cup with 200 ml fresh boiled water (100 degree C).</li>
+                        <li>For every cup with 200 ml fresh boiled water ($100^{\circ}C$).</li>
                         <li>Add one tea bag.</li>
                         <li>Steep for <span class="font-medium">3-4 minutes</span>.</li>
                     </ol>
@@ -522,33 +638,34 @@
             <h2 class="text-3xl font-bold text-roselle-primary mb-4">Scientific Monograph and References</h2>
             <p class="text-lg font-semibold text-roselle-dark mb-3">Hibiscus and Stevia References:</p>
             <ol class="list-decimal list-inside text-sm text-gray-700 ml-4 space-y-2">
-                <li>PURO, K, R SUNJUKTA, S SAMIR, S GHATAK, I SHAKUNTALA, and A SEN. 2016. "Medicinal Uses Of Roselle Plant (Hibiscus Sabdariffa L.): A Mini Review". Indian Journal Of Hill Farming 27 (1): 81-90. <a href="http://www.kiran.nic.in/pdf/IJHF/Vol27_1/9-MedicinalUsesRosellePlant.pdf" target="_blank" class="text-roselle-secondary hover:underline">http: per www.kiran.nic.in per pdf per IJHF per Vol27_1 per 9-MedicinalUsesRosellePlant.pdf</a>.</li>
+                <li>PURO, K, R SUNJUKTA, S SAMIR, S GHATAK, I SHAKUNTALA, and A SEN. 2016. "Medicinal Uses Of Roselle Plant (Hibiscus Sabdariffa L.): A Mini Review". Indian Journal Of Hill Farming 27 (1): 81-90. http://www.kiran.nic.in/pdf/IJHF/Vol27_1/9-MedicinalUsesRosellePlant.pdf.</li>
                 <li>Formagio, ASN., DD. Ramos, MC. Vieira, SR. Ramalho, MM. Silva, NAH. Zárate, MA. Foglio, and JE. Carvalho. 2015. "Phenolic Compounds Of Hibiscus Sabdariffa And Influence Of Organic Residues On Its Antioxidant And Antitumoral Properties". Brazilian Journal Of Biology 75 (1): 69-76. doi:10.1590 per 1519- 6984.07413.</li>
                 <li>Nwachukwu, DanielChukwu, EddyIkemefuna Aneke, LeonardFidelis Obika, and NkiruZuada Nwachukwu. 2015. "Effects Of Aqueous Extract Of Hibiscus Sabdariffa On The Renin-Angiotensin-Aldosterone System Of Nigerians With Mild To Moderate Essential Hypertension: A Comparative Study With Lisinopril". Indian Journal Of Pharmacology 47 (5): 540. doi:10.4103 per 0253-0253.165215.</li>
                 <li>Jalalyazdi M, et al. 2019. "Effect of hibiscus sabdariffa on blood pressure in patients with stage 1 hypertension." J Adv Pharm Technol Res. 10(3):107-111.</li>
                 <li><span class="font-medium">Mechanism Source:</span> Verywell Health article on best time to drink hibiscus tea.</li>
-                <li><span class="font-medium">Steviol Glycosides ADI:</span> JECFA (Joint FAO WHO Expert Committee on Food Additives). Evaluation of certain food additives: Steviol glycosides. WHO Technical Report Series No. 965 (2011). ADI: 0–4 mg(per)kg body weight(per)day (as steviol equivalents). [Source: WHO JECFA Monographs 10 (2010)].</li>
+                <li><span class="font-medium">Steviol Glycosides ADI:</span> JECFA (Joint FAO WHO Expert Committee on Food Additives). Evaluation of certain food additives: Steviol glycosides. WHO Technical Report Series No. 965 (2011). ADI: $0–4~mg/kg$ body weight/day (as steviol equivalents). [Source: WHO JECFA Monographs 10 (2010)].</li>
             </ol>
 
             <p class="text-lg font-semibold text-roselle-dark mt-6 mb-3">Licorice Pharmacopeia Sources:</p>
             <ul class="list-disc list-inside text-sm text-gray-700 ml-4 space-y-1">
                 <li>According to <span class="font-medium">British Pharmacopeia</span>.</li>
-                <li>Trease and Evans Pharmacognosy (15th Edition, page 455).</li>
-                <li>Trease and Evans Pharmacognosy (16th Edition, pages 492 and 495 - referencing ESCOP).</li>
+                <li>Trease and Evans Pharmacognosy ($15^{\text{th}}$ Edition, page 455).</li>
+                <li>Trease and Evans Pharmacognosy ($16^{\text{th}}$ Edition, pages 492 and 495 - referencing ESCOP).</li>
             </ul>
         </section>
+
         
         <!-- --- FEEDBACK SECTIONS START HERE --- -->
         
-        <!-- Connection Status Indicator (Static for Local Host) -->
+        <!-- Connection Status Indicator (Dynamically Updated) -->
         <p id="connection-status" class="mb-6 text-center text-sm font-medium text-gray-500">
-            <span id="status-dot" class="status-dot"></span>
-            <span id="status-text" class="text-green-600">Local Status: Data is saved only in this browser's storage.</span>
+            <span id="status-dot" class="status-dot bg-yellow-500"></span>
+            <span id="status-text" class="text-yellow-600">Connecting to database...</span>
         </p>
         
         <!-- Vote Section -->
         <section id="vote-section" class="bg-white p-6 md:p-10 rounded-xl shadow-lg mb-12 border-t-4 border-roselle-secondary">
-            <h2 class="text-3xl font-bold text-roselle-primary mb-6">Rate Your Experience:</h2>
+            <h2 class="text-3xl font-bold text-roselle-primary mb-6">Global User Rating</h2>
             
             <div class="flex flex-col sm:flex-row justify-around items-center space-y-4 sm:space-y-0 sm:space-x-8">
                 <!-- Like Button -->
@@ -562,27 +679,30 @@
                     <span class="text-lg font-semibold mt-1">Needs Work (<span id="dislike-count">0</span>)</span>
                 </button>
             </div>
-            <p id="vote-message" class="text-center text-sm text-gray-500 mt-4 italic">Loading user data...</p>
+            <p id="vote-message" class="text-center text-sm text-gray-500 mt-4 italic">Waiting for connection...</p>
         </section>
 
         <!-- Comment Submission Form -->
         <section id="comment-form" class="bg-white p-6 md:p-10 rounded-xl shadow-lg mb-12 border-t-4 border-roselle-primary">
-            <h2 class="text-3xl font-bold text-roselle-primary mb-6">Suggestions and Comments</h2>
-            <input type="text" id="commenter-name" placeholder="Your Name (Optional)" maxlength="50" class="w-full p-3 mb-3 border-2 border-roselle-light rounded-lg focus:ring-roselle-secondary focus:border-roselle-secondary transition">
-            <textarea id="comment-text" rows="4" placeholder="Share your valuable feedback and suggestions..." maxlength="500" class="w-full p-3 border-2 border-roselle-light rounded-lg focus:ring-roselle-secondary focus:border-roselle-secondary transition"></textarea>
+            <h2 class="text-3xl font-bold text-roselle-primary mb-6">Share Your Suggestions</h2>
+            <input type="text" id="commenter-name" placeholder="Your Display Name (Optional)" maxlength="50" class="w-full p-3 mb-3 border-2 border-roselle-light rounded-lg focus:ring-roselle-secondary focus:border-roselle-secondary transition">
+            <textarea id="comment-text" rows="4" placeholder="Share your valuable feedback and suggestions (max 500 characters)..." maxlength="500" class="w-full p-3 border-2 border-roselle-light rounded-lg focus:ring-roselle-secondary focus:border-roselle-secondary transition"></textarea>
             <button onclick="submitComment()" class="mt-4 w-full md:w-auto px-8 py-3 bg-roselle-primary text-white font-semibold rounded-lg transition duration-300 hover:bg-roselle-dark shadow-md transform hover:scale-[1.02] disabled:opacity-50 disabled:cursor-not-allowed" disabled id="submit-comment-btn">
-                Submit Feedback 🚀
+                Submit Feedback Globally 🚀
             </button>
         </section>
 
         <!-- Comments List -->
         <section id="comments-section">
-            <h2 class="text-3xl font-bold text-roselle-primary mb-6 border-b-2 border-roselle-secondary pb-2">Customer Insights (Local)</h2>
+            <h2 class="text-3xl font-bold text-roselle-primary mb-6 border-b-2 border-roselle-secondary pb-2">
+                Community Insights (Real-Time)
+                <span id="comment-counter" class="text-xl text-gray-500 font-normal ml-3">(0 Comments)</span>
+            </h2>
             <div id="comments-list" class="space-y-4">
                 <!-- Comments will be injected here by JavaScript -->
-                <p class="text-center text-gray-500 italic">Comments will appear here once loaded from local storage...</p>
+                <p class="text-center text-gray-500 italic p-4 bg-white rounded-lg shadow-sm">Loading shared comments...</p>
             </div>
-            <p id="current-user-id" class="text-center user-id-text mt-6 text-roselle-dark font-medium">Data is stored locally in your browser and is not shared with others.</p>
+            <p id="current-user-id" class="text-center user-id-text mt-6 text-roselle-dark font-medium">Authenticating user for database access...</p>
         </section>
 
         <footer class="text-center py-6 border-t border-roselle-light mt-10 text-sm text-gray-500">
